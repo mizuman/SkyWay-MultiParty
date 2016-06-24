@@ -1255,6 +1255,8 @@ new function() {
     this.stream = null; // my media stream
     this.tracks_ = {};
     this.pollInterval = null;
+    this.audioCtx = null;
+    this.audioNode = {};
 
     this.opened = false;
 
@@ -1299,6 +1301,10 @@ new function() {
       // 接続確認pollingを始める
       if(this.opts.polling) {
         this.startPollingConnections_();
+      }
+
+      if(this.opts.webAudio) {
+        this.initAudioContext_();
       }
     }.bind(this));
 
@@ -1368,6 +1374,11 @@ new function() {
         };
       })
     }, self.opts.polling_interval);
+  }
+
+  MultiParty_.prototype.initAudioContext_ = function (){
+    var self = this;
+    self.audioCtx = new window.AudioContext();
   }
 
   ////////////////////////////////////
@@ -1556,6 +1567,11 @@ new function() {
     // prevent to call twice.
     // if(!!this.peers[peer_id].video) return;
 
+    var self = this;
+    if(self.opts.webAudio){
+      self.setupWebAudioNode_(peer_id, stream);
+    }
+
     var url = window.URL.createObjectURL(stream);
 
     // set isReconnect as boolean
@@ -1569,12 +1585,52 @@ new function() {
   // loadedmetadataが完了したら、'peer_video'をfireする
   MultiParty_.prototype.setupPeerScreen_ = function(peer_id, stream, isReconnect) {
     var self = this;
+    if(self.opts.webAudio){
+      console.log(self);
+      self.setupWebAudioNode_(peer_id, stream);
+    }
     if(!isReconnect){
       isReconnect = false;
     }
 
     self.peers[peer_id].screen_receiver.video = stream;
     self.fire_('peer_ss', {src: URL.createObjectURL(stream), id: peer_id, reconnect: isReconnect});
+  }
+
+  // webAudio apiのnodeをセットアップする
+  MultiParty_.prototype.setupWebAudioNode_ = function(peer_id, stream) {
+    var self = this;
+
+    self.audioNode[peer_id] = {};
+    self.audioNode[peer_id].nodelist = [];
+    self.audioNode[peer_id].nodelist.push(self.audioCtx.createMediaStreamSource(stream));
+
+    if(self.opts.panner) {
+      self.audioNode[peer_id].panner = self.audioCtx.createPanner();
+      self.audioNode[peer_id].nodelist.push(self.audioNode[peer_id].panner);
+      self.setParamWebAudioNode_(peer_id, {node: "panner", type: "setPosition", param: {x:0}});
+    }
+
+    // Nodeの連結
+    for(var i = 0; i < self.audioNode[peer_id].nodelist.length-1; i++){
+      self.audioNode[peer_id].nodelist[i].connect(self.audioNode[peer_id].nodelist[i+1]);
+    }
+
+    self.audioNode[peer_id].nodelist[i].connect(self.audioCtx.destination);
+  }
+
+  MultiParty_.prototype.setParamWebAudioNode_ = function(peer_id, data){
+    var self = this;
+    if(data.node == "panner"){
+
+      if(data.type == "setPosition")
+      var posX = data.param.x === undefined ? 0 : data.param.x;
+      var posY = data.param.y === undefined ? 0 : data.param.y;
+      var posZ = data.param.z === undefined ? -1 : data.param.z;
+      self.audioNode[peer_id].panner.setPosition(posX, posY, posZ);
+    } else {
+      console.log("this audio node is not supported");
+    }
   }
 
   // peerのdcとmcを全てクローズする
@@ -1761,6 +1817,14 @@ new function() {
       opts.serialization = opts_.serialization;
     }
 
+    if(!opts_.panner) {
+      opts.webAudio = false;
+      opts.panner = false;
+    } else {
+      opts.webAudio = true;
+      opts.panner = true;
+    }
+
     // stream check
     opts.video_stream = (opts_.video === undefined ? true : opts_.video);
     opts.audio_stream = (opts_.audio === undefined ? true : opts_.audio);
@@ -1813,11 +1877,18 @@ new function() {
 
   // video nodeを作る
   MultiParty_.util.createVideoNode = function(video) {
+    var self = this;
+
     // 古いノードが会った場合は削除
     var prev_node = document.getElementById(video.id);
     if(prev_node) prev_node.parentNode.removeChild(prev_node);
 
     // 表示用のビデオノードを作る
+
+    var div_ = document.createElement("div");
+    div_.setAttribute("id", video.id + "_div");
+
+
     var v_ = document.createElement("video");
     v_.setAttribute("src", video.src);
     v_.setAttribute("id", video.id);
@@ -1840,11 +1911,19 @@ new function() {
       }
     }, 500);
 
-    return v_;
-  }
+    var label_ = document.createElement("label");
+    var direction_slide_ = document.createElement("input");
+    direction_slide_.setAttribute("type", "range");
+    direction_slide_.setAttribute("class", "pannerSlide");
+    direction_slide_.setAttribute("min", -2);
+    direction_slide_.setAttribute("max", 2);
+    direction_slide_.setAttribute("step", 0.01);
 
+    div_.appendChild(v_);
+    div_.appendChild(direction_slide_);
 
-
+    return div_;
+  };
 
   ////////////////////////////////////
   // public method
@@ -1979,9 +2058,6 @@ new function() {
       }
     }
   }
-
-
-
 
 
   // オブジェクトの宣言
